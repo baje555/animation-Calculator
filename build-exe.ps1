@@ -50,6 +50,7 @@ Write-Host "[3/3] Building .exe installer..." -ForegroundColor Cyan
     "--main-class"    "com.animationcalc.App" `
     "--runtime-image" $runtimeDir `
     "--dest"          $destDir `
+    "--icon"          (Join-Path $BASE "Illustration2.ico") `
     "--win-dir-chooser" `
     "--win-menu" `
     "--win-shortcut" `
