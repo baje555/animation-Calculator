@@ -3,35 +3,39 @@ name: Build Windows Installer
 on:
   push:
     branches: [ main, master ]
-  workflow_dispatch:   # lets you trigger it manually from the GitHub UI
+  workflow_dispatch:
 
 jobs:
   build:
-    runs-on: windows-latest   # GitHub's Windows runner has WiX pre-installed
+    runs-on: windows-latest
 
     steps:
-      # 1. Check out the source
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 2. Set up JDK 21 (includes jpackage and jlink)
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 21
 
-      # 3. Build the fat JAR (skip tests for speed; they ran on your machine)
-      - name: Build fat JAR with Maven
+      # Install WiX 3 – jpackage does NOT support WiX 4 (pre-installed on runner)
+      - name: Install WiX 3
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314.exe" -OutFile "$env:TEMP\wix314.exe"
+          Start-Process -FilePath "$env:TEMP\wix314.exe" -ArgumentList "/quiet" -Wait
+          # Add WiX 3 to PATH (ahead of WiX 4 so jpackage finds the right one)
+          $wix3 = "C:\Program Files (x86)\WiX Toolset v3.14\bin"
+          echo "$wix3" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        shell: pwsh
+
+      - name: Build fat JAR
         run: mvn package -DskipTests --batch-mode
 
-      # 4. Build a minimal JRE with jlink (no javafx.fxml = no java.scripting needed)
       - name: Build runtime image with jlink
         run: |
-          $javaHome = $env:JAVA_HOME
-          $jmods    = "$javaHome\jmods"
           jlink `
-            --module-path "$jmods" `
+            --module-path "$env:JAVA_HOME\jmods" `
             --add-modules  java.base,java.desktop,java.logging,java.xml,java.prefs,java.naming,jdk.unsupported,jdk.unsupported.desktop `
             --output       target\runtime-image `
             --strip-debug `
@@ -40,22 +44,19 @@ jobs:
             --compress     zip-6
         shell: pwsh
 
-      # 5. Collect JavaFX win jars for the module path at launch
-      - name: Locate JavaFX jars
-        id: fxjars
-        run: |
-          $jars = (Get-ChildItem "$env:USERPROFILE\.m2\repository\org\openjfx\javafx-*\21.0.2\javafx-*-21.0.2-win.jar").FullName -join ";"
-          echo "FX_JARS=$jars" >> $env:GITHUB_OUTPUT
-        shell: pwsh
-
-      # 6. Stage the fat JAR for jpackage
-      - name: Stage input for jpackage
+      - name: Stage input jar
         run: |
           New-Item -ItemType Directory -Force -Path target\jpackage-input | Out-Null
           Copy-Item (Get-ChildItem target\*-fat.jar | Select-Object -First 1).FullName target\jpackage-input\app.jar
         shell: pwsh
 
-      # 7. Run jpackage → .exe installer (WiX is on the PATH on windows-latest)
+      - name: Collect JavaFX jars
+        id: fxjars
+        run: |
+          $jars = (Get-ChildItem "$env:USERPROFILE\.m2\repository\org\openjfx\javafx-*\21.0.2\javafx-*-21.0.2-win.jar" -ErrorAction SilentlyContinue).FullName -join ";"
+          echo "FX_JARS=$jars" >> $env:GITHUB_OUTPUT
+        shell: pwsh
+
       - name: Build .exe installer with jpackage
         run: |
           $fxJars = "${{ steps.fxjars.outputs.FX_JARS }}"
@@ -78,15 +79,13 @@ jobs:
             --java-options   "--add-opens=javafx.base/com.sun.javafx.event=ALL-UNNAMED"
         shell: pwsh
 
-      # 8. Upload the .exe as a build artifact (downloadable from the Actions tab)
-      - name: Upload installer artifact
+      - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
           name: AnimationExposureCalculator-Windows-Setup
           path: target\installer\AnimationExposureCalculator-*.exe
           retention-days: 90
 
-      # 9. Also create a GitHub Release so it appears on the Releases page
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
@@ -94,13 +93,13 @@ jobs:
           tag_name: v1.0.0
           name: "Animation Exposure Calculator v1.0.0"
           body: |
-            ## Installation
-            Download `AnimationExposureCalculator-1.0.0.exe` and double-click it.
-            No Java installation required — the runtime is bundled.
+            ## Download & Install
+            Click **AnimationExposureCalculator-1.0.0.exe** below.
+            Double-click it to install. No Java required — runtime is bundled.
 
-            ## What's included
-            - Exposure Calculator tab: draw timing from frame + step segments
-            - Time ↔ Frames Converter tab: seconds/frames conversion
+            ## Features
+            - **Exposure tab**: calculate drawing positions from frame + step segments
+            - **Time ↔ Frames tab**: convert seconds/frames at any FPS
           files: target\installer\AnimationExposureCalculator-*.exe
           draft: false
           prerelease: false
